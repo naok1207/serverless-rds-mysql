@@ -1,0 +1,181 @@
+service: rds-project
+
+frameworkVersion: "3"
+
+useDotenv: true
+
+plugins:
+  - serverless-offline
+
+custom:
+  config: ${file(./.config.json)}
+
+provider:
+  stage: ${opt:stage, 'dev'}
+  name: aws
+  runtime: nodejs16.x
+  vpc:
+    securityGroupIds:
+      - !GetAtt SecurityGroup.GroupId
+    subnetIds:
+      - !GetAtt PublicSubnetA.SubnetId
+      - !GetAtt PublicSubnetB.SubnetId
+  environment:
+    MYSQL_ENDPOINT: !GetAtt DBInstance.Endpoint.Address
+    MYSQL_DATABASE: ${self:custom.config.db.database}
+    MYSQL_USER: ${self:custom.config.db.user}
+    MYSQL_PASSWORD: ${self:custom.config.db.password}
+    MYSQL_PORT: ${self:custom.config.db.port}
+
+functions:
+  customerIndex:
+    handler: handler.customerIndex
+    events:
+      - httpApi:
+          path: /customers
+          method: get
+  customerCreate:
+    handler: handler.customerCreate
+    events:
+      - httpApi:
+          path: /customers/create
+          method: post
+
+resources:
+  Resources:
+    VPC: # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-vpc.html
+      Type: AWS::EC2::VPC
+      DeletionPolicy: Delete
+      Properties:
+        CidrBlock: 10.0.0.0/16
+        EnableDnsSupport: true
+        EnableDnsHostnames: true
+        Tags:
+          - Key: Name
+            Value: serverless-rds
+
+    RouteTable:
+      Type: AWS::EC2::RouteTable
+      Properties:
+        VpcId: !Ref VPC
+        Tags:
+          - Key: Name
+            Value: serverless-rds-public-route-table
+
+    InternetGateway:
+      Type: AWS::EC2::InternetGateway
+      Properties:
+        Tags:
+          - Key: Name
+            Value: serverless-rds-igw
+
+    Route:
+      Type: AWS::EC2::Route
+      Properties:
+        RouteTableId: !Ref RouteTable
+        DestinationCidrBlock: 0.0.0.0/0
+        GatewayId: !Ref InternetGateway
+
+    VPCGatewayAttachment:
+      Type: AWS::EC2::VPCGatewayAttachment
+      Properties:
+        VpcId: !Ref VPC
+        InternetGatewayId: !Ref InternetGateway
+
+    PublicSubnetA:
+      Type: AWS::EC2::Subnet
+      Properties:
+        VpcId: !Ref VPC
+        CidrBlock: 10.0.64.0/20
+        AvailabilityZone: us-east-1a
+        Tags:
+          - Key: Name
+            Value: serverless-rds-public-subnet-a
+
+    SubnetRouteTableAssciationPublicSubnetA:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        RouteTableId: !Ref RouteTable
+        SubnetId: !Ref PublicSubnetA
+
+    PublicSubnetB:
+      Type: AWS::EC2::Subnet
+      Properties:
+        VpcId: !Ref VPC
+        CidrBlock: 10.0.80.0/20
+        AvailabilityZone: us-east-1b
+        Tags:
+          - Key: Name
+            Value: serverless-rds-public-subnet-b
+
+    SubnetRouteTableAssciationPublicSubnetB:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        RouteTableId: !Ref RouteTable
+        SubnetId: !Ref PublicSubnetB
+
+    SecurityGroup: # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-security-group.html
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupName: serverless-rds
+        GroupDescription: Security Group for serverless-rds
+        VpcId: !Ref VPC
+
+    SecurityGroupIngress: # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-security-group-ingress.html
+      Type: AWS::EC2::SecurityGroupIngress
+      Properties:
+        IpProtocol: tcp
+        CidrIp: ${self:custom.config.db.myip}
+        GroupId: !GetAtt SecurityGroup.GroupId
+        ToPort: 3306
+        FromPort: 3306
+
+    SecurityGroupIngress2:
+      Type: AWS::EC2::SecurityGroupIngress
+      Properties:
+        IpProtocol: tcp
+        CidrIp: 10.0.64.0/20
+        GroupId: !GetAtt SecurityGroup.GroupId
+        ToPort: 3306
+        FromPort: 3306
+
+    SecurityGroupIngress3:
+      Type: AWS::EC2::SecurityGroupIngress
+      Properties:
+        IpProtocol: tcp
+        CidrIp: 10.0.80.0/20
+        GroupId: !GetAtt SecurityGroup.GroupId
+        ToPort: 3306
+        FromPort: 3306
+
+    DBInstance: # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-resource-rds-dbinstance.html
+      Type: AWS::RDS::DBInstance
+      Properties:
+        AllocatedStorage: "20" # ストレージの容量
+        AvailabilityZone: !GetAtt PublicSubnetA.AvailabilityZone
+        BackupRetentionPeriod: 7 # 自動バックアップが保持される日数
+        CopyTagsToSnapshot: true # スナップショットにタグをコピーする
+        DBInstanceClass: db.t2.micro # メモリ容量
+        DBInstanceIdentifier: serverless-rdb-db-instance # インスタンス名
+        DBName: ${self:custom.config.db.database}
+        DBSubnetGroupName: !Ref DBSubnetGroup
+        Engine: MySQL # DBエンジンの設定 postgres aurora など
+        MasterUsername: ${self:custom.config.db.user}
+        MasterUserPassword: ${self:custom.config.db.password}
+        MaxAllocatedStorage: 1000 # ストレージのオートスケーリング
+        Port: "3306" # 接続を受け入れるポート
+        PubliclyAccessible: true # ネットからの接続を可能にする
+        # StorageEncrypted: true # インスタンスの暗号化設定 db.t2.microではサポートしていない
+        StorageType: gp2 # ストレージタイプ
+        VPCSecurityGroups:
+          - !GetAtt SecurityGroup.GroupId
+      DeletionPolicy: Snapshot
+
+    DBSubnetGroup:
+      Type: AWS::RDS::DBSubnetGroup
+      Properties:
+        DBSubnetGroupName: serverless-rds-db-subnetgroup
+        DBSubnetGroupDescription: "serverless-rds subnet"
+        SubnetIds:
+          - !GetAtt PublicSubnetA.SubnetId # プライベートサブネットに設置すると踏み台を用意する必要がある
+          - !GetAtt PublicSubnetB.SubnetId

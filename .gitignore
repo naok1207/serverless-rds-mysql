@@ -1,0 +1,15 @@
+# package directories
+node_modules
+jspm_packages
+
+# Serverless directories
+.serverless
+
+# user_own_files
+ignores
+
+# env
+.env
+
+# config
+.config.json

@@ -1,0 +1,9 @@
+{
+  "db": {
+    "user": "admin",
+    "password": "password",
+    "database": "mydb",
+    "port": 3306,
+    "myip": ""
+  }
+}
